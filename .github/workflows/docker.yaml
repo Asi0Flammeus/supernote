@@ -33,7 +33,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       # Set up Buildx runner for multi-platform builds
       - name: Set up Docker Buildx
