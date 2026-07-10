@@ -17,6 +17,7 @@ from supernote.models.schedule import (
     UpdateScheduleTaskVO,
 )
 from supernote.server.services.schedule import ScheduleService
+from supernote.server.utils.realtime import notify_finish_folder
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,7 @@ async def create_group(request: web.Request) -> web.Response:
 
     try:
         group = await schedule_service.create_group(user_id, dto.title)
+        await notify_finish_folder(request.app["sio"], user_id, directory_id=None)
         return web.json_response(
             AddScheduleTaskGroupVO(
                 success=True, task_list_id=str(group.task_list_id)
@@ -89,6 +91,7 @@ async def delete_group(request: web.Request) -> web.Response:
         return web.json_response(
             create_error_response("Not found").to_dict(), status=404
         )
+    await notify_finish_folder(request.app["sio"], user_id, directory_id=None)
 
     return web.json_response(BaseResponse(success=True).to_dict())
 
@@ -124,6 +127,7 @@ async def create_task(request: web.Request) -> web.Response:
             recurrence=dto.recurrence,
             is_reminder_on=(dto.is_reminder_on == BooleanEnum.YES),
         )
+        await notify_finish_folder(request.app["sio"], user_id, directory_id=None)
         return web.json_response(
             AddScheduleTaskVO(success=True, task_id=str(task.task_id)).to_dict()
         )
@@ -201,6 +205,7 @@ async def update_task(request: web.Request) -> web.Response:
         return web.json_response(
             create_error_response("Not found").to_dict(), status=404
         )
+    await notify_finish_folder(request.app["sio"], user_id, directory_id=None)
 
     return web.json_response(
         UpdateScheduleTaskVO(success=True, task_id=str(updated_task.task_id)).to_dict()
@@ -219,6 +224,7 @@ async def delete_task(request: web.Request) -> web.Response:
         return web.json_response(
             create_error_response("Not found").to_dict(), status=404
         )
+    await notify_finish_folder(request.app["sio"], user_id, directory_id=None)
 
     return web.json_response(BaseResponse(success=True).to_dict())
 
@@ -279,6 +285,7 @@ async def delete_group_device(request: web.Request) -> web.Response:
     success = await schedule_service.delete_group(user_id, group_id)
     if not success:
         return web.json_response(create_error_response("Not found").to_dict(), status=404)
+    await notify_finish_folder(request.app["sio"], user_id, directory_id=None)
     return web.json_response(BaseResponse(success=True).to_dict())
 
 
@@ -358,6 +365,7 @@ async def update_task_device_noid(request: web.Request) -> web.Response:
     updated_task = await schedule_service.update_task(user_id, task_id, **updates)
     if not updated_task:
         return web.json_response(create_error_response("Not found").to_dict(), status=404)
+    await notify_finish_folder(request.app["sio"], user_id, directory_id=None)
 
     return web.json_response(
         UpdateScheduleTaskVO(success=True, task_id=str(updated_task.task_id)).to_dict()
@@ -399,4 +407,5 @@ async def delete_task_device(request: web.Request) -> web.Response:
     success = await schedule_service.delete_task(user_id, task_id)
     if not success:
         return web.json_response(create_error_response("Not found").to_dict(), status=404)
+    await notify_finish_folder(request.app["sio"], user_id, directory_id=None)
     return web.json_response(BaseResponse(success=True).to_dict())

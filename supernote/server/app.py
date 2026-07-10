@@ -19,6 +19,7 @@ from supernote.server.db.migrations import run_migrations
 from supernote.server.mcp.auth import create_auth_app
 from supernote.server.mcp.server import create_mcp_server, run_server, set_services
 from supernote.server.utils.auth_utils import get_token_from_request
+from supernote.server.utils.realtime import user_room
 
 from .config import ServerConfig
 from .constants import MAX_UPLOAD_SIZE
@@ -332,16 +333,22 @@ def create_app(config: ServerConfig) -> web.Application:
         ),
     )
 
-    # Mount a permissive Socket.IO / Engine.IO v3 handshake endpoint.
+    # Mount a Socket.IO / Engine.IO v3 handshake endpoint plus real-time push
+    # sync (`finishFolderMessage`, see ARCHITECTURE.md section 7.2.2).
     #
-    # This is a deliberately minimal "accept-and-idle" experiment: the real
-    # device polls GET /socket.io/?...&EIO=3&transport=websocket&token=<jwt>
+    # This started as a deliberately minimal "accept-and-idle" experiment: the
+    # real device polls GET /socket.io/?...&EIO=3&transport=websocket&token=<jwt>
     # and previously got 401 every time because there was no socketio
     # implementation at all. We pin python-socketio 4.x / python-engineio
     # 3.x (the Engine.IO protocol v3 line) to match the old firmware's
     # client, reuse the existing REST JWT verification (UserService.
     # verify_token) for the `token` query param, and ignore `sign`/`random`
-    # entirely. No event emission or business logic beyond accept/reject.
+    # entirely.
+    #
+    # Every accepted session is placed in a per-user room (`user:<id>`) via
+    # the built-in socketio session/room machinery (not a hand-rolled dict),
+    # so a mutation from any of that user's sessions/devices can be pushed to
+    # all of their OTHER connected sessions.
     sio = socketio.AsyncServer(async_mode="aiohttp", cors_allowed_origins="*")
     app["sio"] = sio
 
@@ -356,10 +363,32 @@ def create_app(config: ServerConfig) -> web.Application:
         if not session:
             logger.warning("Socket.IO connect rejected (sid=%s): invalid token", sid)
             return False
+        user_id = await user_service.get_user_id(session.email)
+        await sio.save_session(sid, {"user_id": user_id, "email": session.email})
+        sio.enter_room(sid, user_room(user_id))
         logger.info(
-            "Socket.IO connect accepted for %s (sid=%s)", session.email, sid
+            "Socket.IO connect accepted for %s (sid=%s, user_id=%s)",
+            session.email,
+            sid,
+            user_id,
         )
         return True
+
+    @sio.event
+    async def disconnect(sid: str) -> None:
+        try:
+            session = await sio.get_session(sid)
+        except KeyError:
+            session = None
+        if session and "user_id" in session:
+            sio.leave_room(sid, user_room(session["user_id"]))
+            logger.info(
+                "Socket.IO disconnected sid=%s (user_id=%s)",
+                sid,
+                session["user_id"],
+            )
+        else:
+            logger.info("Socket.IO disconnected sid=%s (no session)", sid)
 
     sio.attach(app, socketio_path="socket.io")
 

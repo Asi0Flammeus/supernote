@@ -47,6 +47,7 @@ from supernote.server.services.file import (
     FileService,
 )
 from supernote.server.utils.paths import generate_inner_name
+from supernote.server.utils.realtime import notify_finish_folder
 from supernote.server.utils.url_signer import UrlSigner
 
 logger = logging.getLogger(__name__)
@@ -356,6 +357,9 @@ async def handle_upload_finish(request: web.Request) -> web.Response:
             status=500,
         )
 
+    user_id = await request.app["user_service"].get_user_id(user_email)
+    await notify_finish_folder(request.app["sio"], user_id, directory_id=entity.parent_id)
+
     return web.json_response(
         FileUploadFinishLocalVO(
             equipment_no=req_data.equipment_no or "",
@@ -442,6 +446,8 @@ async def handle_create_folder(request: web.Request) -> web.Response:
         return err.to_response()
     except Exception as err:
         return SupernoteError.uncaught(err).to_response()
+    user_id = await request.app["user_service"].get_user_id(user_email)
+    await notify_finish_folder(request.app["sio"], user_id, directory_id=entry.parent_id)
     return web.json_response(
         CreateFolderLocalVO(
             equipment_no=req_data.equipment_no,
@@ -469,6 +475,8 @@ async def handle_delete_folder(request: web.Request) -> web.Response:
         return err.to_response()
     except Exception as err:
         return SupernoteError.uncaught(err).to_response()
+    user_id = await request.app["user_service"].get_user_id(user_email)
+    await notify_finish_folder(request.app["sio"], user_id, directory_id=deleted_item.parent_id)
 
     return web.json_response(
         DeleteFolderLocalVO(
@@ -499,6 +507,8 @@ async def handle_move_file(request: web.Request) -> web.Response:
         return err.to_response()
     except Exception as err:
         return SupernoteError.uncaught(err).to_response()
+    user_id = await request.app["user_service"].get_user_id(user_email)
+    await notify_finish_folder(request.app["sio"], user_id, directory_id=result.parent_id)
     return web.json_response(
         FileMoveLocalVO(
             equipment_no=req_data.equipment_no,
@@ -528,6 +538,8 @@ async def handle_copy_file(request: web.Request) -> web.Response:
         return err.to_response()
     except Exception as err:
         return SupernoteError.uncaught(err).to_response()
+    user_id = await request.app["user_service"].get_user_id(user_email)
+    await notify_finish_folder(request.app["sio"], user_id, directory_id=result.parent_id)
     return web.json_response(
         FileCopyLocalVO(
             equipment_no=req_data.equipment_no,

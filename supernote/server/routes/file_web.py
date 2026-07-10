@@ -43,6 +43,7 @@ from supernote.server.constants import (
     ORDERED_WEB_ROOT,
 )
 from supernote.server.exceptions import SupernoteError
+from supernote.server.utils.realtime import notify_finish_folder
 from supernote.server.services.file import (
     FileEntity,
     FileService,
@@ -177,6 +178,9 @@ async def handle_recycle_delete(request: web.Request) -> web.Response:
         await file_service.delete_from_recycle(user_email, req_data.id_list)
     except SupernoteError as err:
         return err.to_response()
+
+    user_id = await request.app["user_service"].get_user_id(user_email)
+    await notify_finish_folder(request.app["sio"], user_id, directory_id=None)
     return web.json_response(BaseResponse(success=True).to_dict())
 
 
@@ -194,6 +198,9 @@ async def handle_recycle_revert(request: web.Request) -> web.Response:
         await file_service.revert_from_recycle(user_email, req_data.id_list)
     except SupernoteError as err:
         return err.to_response()
+
+    user_id = await request.app["user_service"].get_user_id(user_email)
+    await notify_finish_folder(request.app["sio"], user_id, directory_id=None)
     return web.json_response(BaseResponse(success=True).to_dict())
 
 
@@ -209,6 +216,9 @@ async def handle_recycle_clear(request: web.Request) -> web.Response:
         await file_service.clear_recycle(user_email)
     except SupernoteError as err:
         return err.to_response()
+
+    user_id = await request.app["user_service"].get_user_id(user_email)
+    await notify_finish_folder(request.app["sio"], user_id, directory_id=None)
     return web.json_response(BaseResponse(success=True).to_dict())
 
 
@@ -390,6 +400,11 @@ async def handle_folder_add(request: web.Request) -> web.Response:
     except Exception as err:
         return SupernoteError.uncaught(err).to_response()
 
+    user_id = await request.app["user_service"].get_user_id(user_email)
+    await notify_finish_folder(
+        request.app["sio"], user_id, directory_id=new_dir.parent_id
+    )
+
     response = FolderVO(
         id=str(new_dir.id),
         directory_id=str(new_dir.parent_id),
@@ -479,6 +494,11 @@ async def handle_file_move_web(request: web.Request) -> web.Response:
         )
     except SupernoteError as err:
         return err.to_response()
+
+    user_id = await request.app["user_service"].get_user_id(user_email)
+    await notify_finish_folder(
+        request.app["sio"], user_id, directory_id=req_data.go_directory_id
+    )
     return web.json_response(BaseResponse(success=True).to_dict())
 
 
@@ -498,6 +518,11 @@ async def handle_file_copy_web(request: web.Request) -> web.Response:
         )
     except SupernoteError as err:
         return err.to_response()
+
+    user_id = await request.app["user_service"].get_user_id(user_email)
+    await notify_finish_folder(
+        request.app["sio"], user_id, directory_id=req_data.go_directory_id
+    )
     return web.json_response(BaseResponse(success=True).to_dict())
 
 
@@ -515,6 +540,9 @@ async def handle_file_rename_web(request: web.Request) -> web.Response:
         await file_service.rename_item(user_email, req_data.id, req_data.new_name)
     except SupernoteError as err:
         return err.to_response()
+
+    user_id = await request.app["user_service"].get_user_id(user_email)
+    await notify_finish_folder(request.app["sio"], user_id, directory_id=None)
     return web.json_response(BaseResponse(success=True).to_dict())
 
 
@@ -536,6 +564,11 @@ async def handle_file_delete(request: web.Request) -> web.Response:
         return err.to_response()
     except Exception as err:
         return SupernoteError.uncaught(err).to_response()
+
+    user_id = await request.app["user_service"].get_user_id(user_email)
+    await notify_finish_folder(
+        request.app["sio"], user_id, directory_id=req_data.directory_id
+    )
     return web.json_response(BaseResponse(success=True).to_dict())
 
 
@@ -593,5 +626,10 @@ async def handle_file_upload_finish(request: web.Request) -> web.Response:
         return err.to_response()
     except Exception as err:
         return SupernoteError.uncaught(err).to_response()
+
+    user_id = await request.app["user_service"].get_user_id(user_email)
+    await notify_finish_folder(
+        request.app["sio"], user_id, directory_id=req_data.directory_id
+    )
 
     return web.json_response(BaseResponse(success=True).to_dict())
