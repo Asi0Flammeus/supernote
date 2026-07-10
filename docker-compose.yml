@@ -1,0 +1,18 @@
+services:
+  supernote:
+    build: .
+    container_name: supernote-cloud
+    restart: unless-stopped
+    ports:
+      - "4328:8080"
+    volumes:
+      - supernote-data:/data
+    environment:
+      - SUPERNOTE_HOST=0.0.0.0
+      - SUPERNOTE_PORT=8080
+      # No SUPERNOTE_GEMINI_API_KEY set — AI note-transcription/synthesis features
+      # are disabled until asi0 wants them; core Private Cloud sync (files,
+      # Schedule/To-Do API) works without it.
+
+volumes:
+  supernote-data:
