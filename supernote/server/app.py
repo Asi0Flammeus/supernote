@@ -5,8 +5,10 @@ import logging
 import time
 from pathlib import Path
 from typing import Any, Awaitable, Callable
+from urllib.parse import parse_qs
 
 import aiohttp_remotes
+import socketio
 from aiohttp import web
 from aiohttp_asgi import ASGIResource
 from sqlalchemy import select
@@ -223,7 +225,9 @@ async def jwt_auth_middleware(
         return await handler(request)
 
     # Also allow public access to MCP OAuth which is registered without a
-    # decorator.
+    # decorator. Socket.IO's own connect handler performs its own JWT
+    # verification (see create_app), so the polling/websocket handshake
+    # path is excluded here too.
     if (
         request.path.startswith("/static/")
         or request.path == "/favicon.ico"
@@ -232,6 +236,7 @@ async def jwt_auth_middleware(
         or request.path.startswith("/authorize")
         or request.path.startswith("/token")
         or request.path.startswith("/.well-known/")
+        or request.path.startswith("/socket.io/")
     ):
         return await handler(request)
 
@@ -326,6 +331,37 @@ def create_app(config: ServerConfig) -> web.Application:
             summary_service=summary_service,
         ),
     )
+
+    # Mount a permissive Socket.IO / Engine.IO v3 handshake endpoint.
+    #
+    # This is a deliberately minimal "accept-and-idle" experiment: the real
+    # device polls GET /socket.io/?...&EIO=3&transport=websocket&token=<jwt>
+    # and previously got 401 every time because there was no socketio
+    # implementation at all. We pin python-socketio 4.x / python-engineio
+    # 3.x (the Engine.IO protocol v3 line) to match the old firmware's
+    # client, reuse the existing REST JWT verification (UserService.
+    # verify_token) for the `token` query param, and ignore `sign`/`random`
+    # entirely. No event emission or business logic beyond accept/reject.
+    sio = socketio.AsyncServer(async_mode="aiohttp", cors_allowed_origins="*")
+    app["sio"] = sio
+
+    @sio.event
+    async def connect(sid: str, environ: dict[str, Any], auth: Any = None) -> bool:
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        token = query.get("token", [None])[0]
+        if not token:
+            logger.warning("Socket.IO connect rejected (sid=%s): missing token", sid)
+            return False
+        session = await user_service.verify_token(token)
+        if not session:
+            logger.warning("Socket.IO connect rejected (sid=%s): invalid token", sid)
+            return False
+        logger.info(
+            "Socket.IO connect accepted for %s (sid=%s)", session.email, sid
+        )
+        return True
+
+    sio.attach(app, socketio_path="socket.io")
 
     # Register routes
     app.add_routes(system.routes)
