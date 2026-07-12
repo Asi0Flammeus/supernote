@@ -14,6 +14,7 @@ from supernote.models.schedule import (
     ScheduleTaskGroupVO,
     ScheduleTaskInfo,
     UpdateScheduleTaskDTO,
+    UpdateScheduleTaskListDTO,
     UpdateScheduleTaskVO,
 )
 from supernote.server.services.schedule import ScheduleService
@@ -270,7 +271,9 @@ async def get_group_device(request: web.Request) -> web.Response:
     groups = await schedule_service.list_groups(user_id)
     match = next((g for g in groups if g.task_list_id == group_id), None)
     if not match:
-        return web.json_response(create_error_response("Not found").to_dict(), status=404)
+        return web.json_response(
+            create_error_response("Not found").to_dict(), status=404
+        )
     return web.json_response(
         ScheduleTaskGroupVO(
             success=True,
@@ -294,7 +297,9 @@ async def delete_group_device(request: web.Request) -> web.Response:
     user_id = await request.app["user_service"].get_user_id(user)
     success = await schedule_service.delete_group(user_id, group_id)
     if not success:
-        return web.json_response(create_error_response("Not found").to_dict(), status=404)
+        return web.json_response(
+            create_error_response("Not found").to_dict(), status=404
+        )
     await notify_finish_folder(request.app["sio"], user_id, directory_id=None)
     return web.json_response(BaseResponse(success=True).to_dict())
 
@@ -344,11 +349,15 @@ async def update_task_device_noid(request: web.Request) -> web.Response:
         data = await request.json()
         dto = UpdateScheduleTaskDTO.from_dict(data)
     except Exception as e:
-        return web.json_response(create_error_response(f"Invalid request: {e}").to_dict(), status=400)
+        return web.json_response(
+            create_error_response(f"Invalid request: {e}").to_dict(), status=400
+        )
 
     task_id_raw = data.get("taskId")
     if not task_id_raw:
-        return web.json_response(create_error_response("taskId required").to_dict(), status=400)
+        return web.json_response(
+            create_error_response("taskId required").to_dict(), status=400
+        )
     task_id = int(task_id_raw)
 
     schedule_service: ScheduleService = request.app["schedule_service"]
@@ -374,7 +383,9 @@ async def update_task_device_noid(request: web.Request) -> web.Response:
 
     updated_task = await schedule_service.update_task(user_id, task_id, **updates)
     if not updated_task:
-        return web.json_response(create_error_response("Not found").to_dict(), status=404)
+        return web.json_response(
+            create_error_response("Not found").to_dict(), status=404
+        )
     await notify_finish_folder(request.app["sio"], user_id, directory_id=None)
 
     return web.json_response(
@@ -391,7 +402,9 @@ async def get_task_device(request: web.Request) -> web.Response:
     tasks_dos = await schedule_service.list_tasks(user_id, None)
     match = next((t for t in tasks_dos if t.task_id == task_id), None)
     if not match:
-        return web.json_response(create_error_response("Not found").to_dict(), status=404)
+        return web.json_response(
+            create_error_response("Not found").to_dict(), status=404
+        )
     return web.json_response(
         ScheduleTaskInfo(
             task_id=str(match.task_id),
@@ -402,7 +415,9 @@ async def get_task_device(request: web.Request) -> web.Response:
             importance=match.importance,
             due_time=match.due_time,
             recurrence=match.recurrence,
-            is_reminder_on=(BooleanEnum.YES if match.is_reminder_on else BooleanEnum.NO),
+            is_reminder_on=(
+                BooleanEnum.YES if match.is_reminder_on else BooleanEnum.NO
+            ),
             last_modified=match.update_time,
         ).to_dict()
     )
@@ -416,6 +431,58 @@ async def delete_task_device(request: web.Request) -> web.Response:
     user_id = await request.app["user_service"].get_user_id(user)
     success = await schedule_service.delete_task(user_id, task_id)
     if not success:
-        return web.json_response(create_error_response("Not found").to_dict(), status=404)
+        return web.json_response(
+            create_error_response("Not found").to_dict(), status=404
+        )
+    await notify_finish_folder(request.app["sio"], user_id, directory_id=None)
+    return web.json_response(BaseResponse(success=True).to_dict())
+
+
+@routes.put("/api/file/schedule/task/list")
+async def update_task_list_device(request: web.Request) -> web.Response:
+    # Endpoint: PUT /api/file/schedule/task/list
+    # Purpose: Bulk update of multiple schedule tasks in one call (the real
+    # device sends this after a batch of local edits, e.g. marking several
+    # tasks completed and reordering them -- confirmed via trace log body
+    # {"updateScheduleTaskList": [{"taskId": ..., "status": "completed",
+    # ...}, ...]}). Previously 404'd since only the single-task PUT
+    # /api/file/schedule/task route existed. Applies the same per-task
+    # field mapping as update_task_device_noid to each item in the list.
+    # Response: BaseResponse
+    user = request["user"]
+    try:
+        data = await request.json()
+        dto = UpdateScheduleTaskListDTO.from_dict(data)
+    except Exception as e:
+        return web.json_response(
+            create_error_response(f"Invalid request: {e}").to_dict(), status=400
+        )
+    schedule_service: ScheduleService = request.app["schedule_service"]
+    user_id = await request.app["user_service"].get_user_id(user)
+    for task_dto in dto.update_schedule_task_list:
+        if not task_dto.task_id:
+            continue
+        task_id = int(task_dto.task_id)
+        updates: dict[str, Any] = {}
+        if task_dto.title is not None:
+            updates["title"] = task_dto.title
+        if task_dto.detail is not None:
+            updates["detail"] = task_dto.detail
+        if task_dto.status is not None:
+            updates["status"] = task_dto.status
+        if task_dto.importance is not None:
+            updates["importance"] = task_dto.importance
+        if task_dto.due_time is not None:
+            updates["due_time"] = task_dto.due_time
+        if task_dto.completed_time is not None:
+            updates["completed_time"] = task_dto.completed_time
+        if task_dto.recurrence is not None:
+            updates["recurrence"] = task_dto.recurrence
+        if task_dto.is_reminder_on is not None:
+            updates["is_reminder_on"] = task_dto.is_reminder_on == BooleanEnum.YES
+        if task_dto.task_list_id is not None:
+            updates["task_list_id"] = int(task_dto.task_list_id)
+        if updates:
+            await schedule_service.update_task(user_id, task_id, **updates)
     await notify_finish_folder(request.app["sio"], user_id, directory_id=None)
     return web.json_response(BaseResponse(success=True).to_dict())

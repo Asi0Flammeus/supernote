@@ -1,3 +1,4 @@
+import time
 import pytest
 from aiohttp.test_utils import TestClient
 
@@ -188,3 +189,48 @@ async def test_create_task_device_missing_title_still_rejected(
             "/api/file/schedule/task",
             json={"taskListId": "1"},
         )
+
+
+async def test_update_task_list_device(authenticated_client: Client) -> None:
+    """PUT /api/file/schedule/task/list must accept a bulk task update.
+    Regression test: the real device 404'd on this endpoint (only the
+    single-task PUT /api/file/schedule/task route existed), which broke
+    real sync cycles that batch multiple task edits (e.g. marking several
+    tasks completed) into one request -- confirmed via trace log body
+    {"updateScheduleTaskList": [...]}.
+    """
+    schedule = ScheduleClient(authenticated_client)
+    group_vo = await schedule.create_group("Bulk Update Group")
+    assert group_vo.task_list_id is not None
+    group_id = int(group_vo.task_list_id)
+    task1 = await schedule.create_task(group_id, "Task One", status="needsAction")
+    task2 = await schedule.create_task(group_id, "Task Two", status="needsAction")
+    assert task1.task_id is not None
+    assert task2.task_id is not None
+    resp = await authenticated_client.put(
+        "/api/file/schedule/task/list",
+        json={
+            "updateScheduleTaskList": [
+                {
+                    "taskId": task1.task_id,
+                    "title": "Task One",
+                    "status": "completed",
+                    "lastModified": int(time.time() * 1000),
+                },
+                {
+                    "taskId": task2.task_id,
+                    "title": "Task Two Renamed",
+                    "status": "completed",
+                    "lastModified": int(time.time() * 1000),
+                },
+            ]
+        },
+    )
+    assert resp.status == 200
+    body = await resp.json()
+    assert body["success"] is True
+    tasks = {str(t.task_id): t async for t in schedule.list_tasks(group_id)}
+    assert tasks[task1.task_id].status == "completed"
+    assert tasks[task1.task_id].title == "Task One"
+    assert tasks[task2.task_id].status == "completed"
+    assert tasks[task2.task_id].title == "Task Two Renamed"
