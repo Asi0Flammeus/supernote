@@ -11,6 +11,13 @@ logger = logging.getLogger(__name__)
 MAX_TITLE_LENGTH = 255
 MAX_DETAIL_LENGTH = 1 * 1024 * 1024  # 1MB
 
+DEFAULT_GROUP_TITLE = "Schedule"
+"""Title used for the implicit per-user group that tasks land in when the
+client creates a task without an explicit taskListId (e.g. real Supernote
+firmware creating a To-Do outside any named list -- see support.supernote.com
+"The To-Do App": tasks with no list assigned show up in the default
+"Schedule" bucket)."""
+
 
 class ScheduleService:
     """Schedule service."""
@@ -33,6 +40,28 @@ class ScheduleService:
             # Commit to persist
             await session.commit()
             # Refresh to get defaults if any
+            await session.refresh(group)
+            return group
+
+    async def get_or_create_default_group(self, user_id: int) -> ScheduleTaskGroupDO:
+        """Find (or lazily create) the user's implicit default group.
+
+        Used when a task is created without an explicit taskListId -- see
+        DEFAULT_GROUP_TITLE.
+        """
+        async with self.session_manager.session() as session:
+            stmt = select(ScheduleTaskGroupDO).where(
+                ScheduleTaskGroupDO.user_id == user_id,
+                ScheduleTaskGroupDO.title == DEFAULT_GROUP_TITLE,
+            )
+            existing = (await session.execute(stmt)).scalars().first()
+            if existing is not None:
+                return existing
+
+            group = ScheduleTaskGroupDO(user_id=user_id, title=DEFAULT_GROUP_TITLE)
+            session.add(group)
+            await session.flush()
+            await session.commit()
             await session.refresh(group)
             return group
 

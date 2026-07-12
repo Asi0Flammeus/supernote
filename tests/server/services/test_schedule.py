@@ -64,6 +64,24 @@ async def test_group_names_are_not_unique(schedule_service: ScheduleService) -> 
     assert groups[0].task_list_id == group2.task_list_id
 
 
+async def test_get_or_create_default_group(schedule_service: ScheduleService) -> None:
+    """Real firmware creates tasks without ever picking a list; the service
+    must lazily create (and thereafter reuse) an implicit default group
+    rather than requiring the client to always specify taskListId."""
+    user_id = 999
+
+    default1 = await schedule_service.get_or_create_default_group(user_id)
+    assert default1.task_list_id is not None
+    assert default1.title == "Schedule"
+
+    # Second call must reuse the same group, not create a duplicate.
+    default2 = await schedule_service.get_or_create_default_group(user_id)
+    assert default2.task_list_id == default1.task_list_id
+
+    groups = await schedule_service.list_groups(user_id)
+    assert len(groups) == 1
+
+
 async def test_task_crud(schedule_service: ScheduleService) -> None:
     """Test task level operations."""
     user_id = 888

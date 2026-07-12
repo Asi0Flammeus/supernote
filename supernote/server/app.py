@@ -85,25 +85,30 @@ async def trace_middleware(
     request: web.Request,
     handler: Callable[[web.Request], Awaitable[web.StreamResponse]],
 ) -> web.StreamResponse:
+    # Capture Request Body BEFORE the handler runs. aiohttp's Request.read()
+    # caches the decoded bytes on self._read_bytes and is safe to call
+    # multiple times -- the handler's own request.json()/request.text()
+    # calls will transparently hit that cache. Reading it here (rather than
+    # after `handler()` returns) is required: request.can_read_body checks
+    # the raw payload stream's EOF state, not whether bytes were cached, so
+    # once the handler has drained the stream via request.json() the
+    # post-handler `can_read_body` check is always False and the body is
+    # lost -- this was the root cause of every captured body being null.
+    req_body_str = None
+    if "/api/oss/upload" in request.path:
+        req_body_str = "<multipart upload skipped>"
+    elif request.can_read_body and not request.content_type.startswith("multipart/"):
+        try:
+            body_bytes = await request.read()
+            req_body_str = body_bytes.decode("utf-8", errors="replace")
+            if len(req_body_str) > TRUNCATE_BODY_LOG:
+                req_body_str = req_body_str[:2048] + "... (truncated)"
+        except Exception:
+            req_body_str = "<error reading body>"
+
     # Process Request
     try:
         response = await handler(request)
-
-        # Capture Request Body (SAFELY AFTER HANDLER)
-        req_body_str = None
-        if "/api/oss/upload" in request.path:
-            req_body_str = "<multipart upload skipped>"
-        elif request.can_read_body and not request.content_type.startswith(
-            "multipart/"
-        ):
-            try:
-                # aiohttp allows reading multiple times once buffered
-                body_bytes = await request.read()
-                req_body_str = body_bytes.decode("utf-8", errors="replace")
-                if len(req_body_str) > TRUNCATE_BODY_LOG:
-                    req_body_str = req_body_str[:2048] + "... (truncated)"
-            except Exception:
-                req_body_str = "<error reading body>"
 
         # Capture Response Body
         res_body_str = None
@@ -139,14 +144,11 @@ async def trace_middleware(
 
     except Exception as e:
         logger.exception(f"Error handling request: {e}")
-        # Try to capture body even on error
-        req_body_str = "<unknown>"
-        try:
-            if request.can_read_body:
-                body_bytes = await request.read()
-                req_body_str = body_bytes.decode("utf-8", errors="replace")
-        except Exception:
-            pass
+        # req_body_str was already captured above, before the handler ran
+        # (and thus before it could raise) -- no need to re-read here.
+        if req_body_str is None:
+            req_body_str = "<unknown>"
+
 
         log_entry = {
             "timestamp": time.time(),

@@ -3,6 +3,7 @@ from aiohttp.test_utils import TestClient
 
 from supernote.client.auth import AbstractAuth
 from supernote.client.client import Client
+from supernote.client.exceptions import BadRequestException
 from supernote.client.schedule import ScheduleClient
 from supernote.models.base import BooleanEnum
 from supernote.models.schedule import (
@@ -144,3 +145,46 @@ async def test_update_task_fields(authenticated_client: Client) -> None:
 
     # Cleanup
     await schedule.delete_group(group_id)
+
+
+async def test_create_task_device_without_task_list_id(
+    authenticated_client: Client,
+) -> None:
+    """Regression test for the real-device sync failure (POST
+    /api/file/schedule/task returning 400 "Missing required fields" on
+    every sync since 2026-07-10): real Supernote firmware creates a To-Do
+    task without ever selecting a list, omitting taskListId entirely. Per
+    api-spec/components/schemas/schedule.yaml, AddScheduleTaskDTO only
+    requires `title` -- taskListId is optional. The server must accept
+    this and fall back to an implicit default group instead of rejecting
+    the request.
+    """
+    resp = await authenticated_client.post(
+        "/api/file/schedule/task",
+        json={"title": "Buy milk"},
+    )
+    assert resp.status == 200
+    body = await resp.json()
+    assert body["success"] is True
+    assert body["taskId"]
+
+    schedule = ScheduleClient(authenticated_client)
+    groups = [g async for g in schedule.list_groups()]
+    assert len(groups) == 1
+    assert groups[0].title == "Schedule"
+
+    tasks = [t async for t in schedule.list_tasks()]
+    assert len(tasks) == 1
+    assert tasks[0].title == "Buy milk"
+    assert str(tasks[0].task_list_id) == str(groups[0].task_list_id)
+
+
+async def test_create_task_device_missing_title_still_rejected(
+    authenticated_client: Client,
+) -> None:
+    """title remains genuinely required -- only taskListId became optional."""
+    with pytest.raises(BadRequestException):
+        await authenticated_client.post(
+            "/api/file/schedule/task",
+            json={"taskListId": "1"},
+        )

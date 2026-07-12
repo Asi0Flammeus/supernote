@@ -379,10 +379,19 @@ class SummaryService:
             count_stmt = select(func.count()).select_from(SummaryDO).where(and_(*filters))
             total = (await session.execute(count_stmt)).scalar_one()
 
+            # Most-recent-first: empirically the real Supernote device only
+            # ever requests page 1 of this sync-manifest endpoint (confirmed
+            # via trace log across multiple real sync attempts, even after
+            # total_pages was fixed to report the true page count) -- it
+            # never walks subsequent pages. If page 1 is oldest-first, brand
+            # new/changed summaries beyond page 1 are invisible to whatever
+            # hash-diff logic the device runs on that single page. Ordering
+            # newest-first maximizes the chance page 1 actually contains the
+            # content that changed since the device's last sync.
             stmt = (
                 select(SummaryDO)
                 .where(and_(*filters))
-                .order_by(SummaryDO.id)
+                .order_by(SummaryDO.id.desc())
                 .offset((page - 1) * size)
                 .limit(size)
             )

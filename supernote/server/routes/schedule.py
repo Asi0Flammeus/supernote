@@ -107,7 +107,7 @@ async def create_task(request: web.Request) -> web.Response:
             create_error_response(f"Invalid request: {e}").to_dict(), status=400
         )
 
-    if not dto.task_list_id or not dto.title:
+    if not dto.title:
         return web.json_response(
             create_error_response("Missing required fields").to_dict(), status=400
         )
@@ -115,10 +115,20 @@ async def create_task(request: web.Request) -> web.Response:
     schedule_service: ScheduleService = request.app["schedule_service"]
     user_id = await request.app["user_service"].get_user_id(user)
 
+    if dto.task_list_id:
+        group_id = int(dto.task_list_id)
+    else:
+        # Real firmware creates To-Do tasks without ever picking a list (the
+        # OpenAPI spec confirms taskListId is optional on AddScheduleTaskDTO,
+        # unlike this handler previously assumed) -- fall back to the user's
+        # implicit default group instead of rejecting the sync.
+        default_group = await schedule_service.get_or_create_default_group(user_id)
+        group_id = default_group.task_list_id
+
     try:
         task = await schedule_service.create_task(
             user_id=user_id,
-            group_id=int(dto.task_list_id),
+            group_id=group_id,
             title=dto.title,
             detail=dto.detail or "",
             status=dto.status or "needsAction",
