@@ -259,14 +259,16 @@ async def handle_query_summary_group(request: web.Request) -> web.Response:
     summary_service: SummaryService = request.app["summary_service"]
 
     try:
-        groups = await summary_service.list_groups(user_email, req_data)
+        page_size = req_data.size or 20
+        groups, total = await summary_service.list_groups(user_email, req_data)
+        total_pages = -(-total // page_size) if page_size else 1
         return web.json_response(
             QuerySummaryGroupVO(
                 summary_do_list=groups,
-                total_records=len(groups),
-                total_pages=1,
+                total_records=total,
+                total_pages=max(total_pages, 1),
                 current_page=req_data.page or 1,
-                page_size=req_data.size or 20,
+                page_size=page_size,
             ).to_dict()
         )
     except SupernoteError as err:
@@ -354,14 +356,16 @@ async def handle_query_summary_hash(request: web.Request) -> web.Response:
     summary_service: SummaryService = request.app["summary_service"]
 
     try:
-        infos = await summary_service.list_summary_infos(user_email, req_data)
+        page_size = req_data.size or 20
+        infos, total = await summary_service.list_summary_infos(user_email, req_data)
+        total_pages = -(-total // page_size) if page_size else 1
         return web.json_response(
             QuerySummaryMD5HashVO(
                 summary_info_vo_list=infos,
-                total_records=len(infos),
-                total_pages=1,
+                total_records=total,
+                total_pages=max(total_pages, 1),
                 current_page=req_data.page or 1,
-                page_size=req_data.size or 20,
+                page_size=page_size,
             ).to_dict()
         )
     except SupernoteError as err:

@@ -1,7 +1,7 @@
 import logging
 import uuid
 
-from sqlalchemy import and_, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from supernote.models.base import BooleanEnum
@@ -282,25 +282,35 @@ class SummaryService:
 
     async def list_groups(
         self, user_email: str, dto: QuerySummaryGroupDTO
-    ) -> list[SummaryItem]:
-        """List summary groups for a user."""
+    ) -> tuple[list[SummaryItem], int]:
+        """List summary groups for a user.
+
+        Returns a (items, total_count) tuple where total_count is the
+        full count of matching rows (not just the current page), so
+        callers can compute correct pagination metadata.
+        """
         user_id = await self.user_service.get_user_id(user_email)
         page = dto.page or 1
         size = dto.size or 20
         async with self.session_manager.session() as session:
+            filters = [
+                SummaryDO.user_id == user_id,
+                SummaryDO.is_deleted.is_(False),
+                SummaryDO.is_summary_group.is_(True),
+            ]
+            count_stmt = select(func.count()).select_from(SummaryDO).where(and_(*filters))
+            total = (await session.execute(count_stmt)).scalar_one()
+
             stmt = (
                 select(SummaryDO)
-                .where(
-                    SummaryDO.user_id == user_id,
-                    SummaryDO.is_deleted.is_(False),
-                    SummaryDO.is_summary_group.is_(True),
-                )
+                .where(and_(*filters))
+                .order_by(SummaryDO.id)
                 .offset((page - 1) * size)
                 .limit(size)
             )
             result = await session.execute(stmt)
             groups = list(result.scalars().all())
-            return [_to_summary_item(g) for g in groups]
+            return [_to_summary_item(g) for g in groups], total
 
     async def _get_summary_by_uuid(
         self, session: AsyncSession, user_id: int, uuid_str: str | None
@@ -338,8 +348,16 @@ class SummaryService:
 
     async def list_summary_infos(
         self, user_email: str, dto: QuerySummaryDTO
-    ) -> list[SummaryInfoItem]:
-        """List lightweight summary info for integrity checking."""
+    ) -> tuple[list[SummaryInfoItem], int]:
+        """List lightweight summary info for integrity checking.
+
+        Returns a (items, total_count) tuple where total_count is the
+        full count of matching rows (not just the current page), so
+        callers can compute correct pagination metadata. Without this,
+        the sync-manifest endpoint would report the current page size as
+        the total, causing clients to believe the returned page is the
+        entire server-side data set and never fetch subsequent pages.
+        """
         user_id = await self.user_service.get_user_id(user_email)
         page = dto.page or 1
         size = dto.size or 20
@@ -358,15 +376,19 @@ class SummaryService:
             if dto.ids:
                 filters.append(SummaryDO.id.in_(dto.ids))
 
+            count_stmt = select(func.count()).select_from(SummaryDO).where(and_(*filters))
+            total = (await session.execute(count_stmt)).scalar_one()
+
             stmt = (
                 select(SummaryDO)
                 .where(and_(*filters))
+                .order_by(SummaryDO.id)
                 .offset((page - 1) * size)
                 .limit(size)
             )
             result = await session.execute(stmt)
             summaries = list(result.scalars().all())
-            return [_to_summary_info_item(s) for s in summaries]
+            return [_to_summary_info_item(s) for s in summaries], total
 
     async def list_summaries_by_id(
         self, user_email: str, dto: QuerySummaryDTO
