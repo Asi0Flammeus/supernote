@@ -22,6 +22,13 @@ from supernote.server.exceptions import SummaryNotFound
 from supernote.server.services.user import UserService
 
 logger = logging.getLogger(__name__)
+MAX_SYNC_MANIFEST_ROWS = 5000
+"""Safety cap on rows returned by list_summary_infos. The real device only
+ever fetches page 1 of the sync-manifest endpoint and never paginates, so
+that endpoint returns the full matching set in one response (see
+docs/summary_api.md). This cap bounds worst-case query/response cost for a
+pathologically large account without reintroducing client-visible
+pagination the real client will never use."""
 
 
 def _to_tag_item(do: SummaryTagDO) -> SummaryTagItem:
@@ -298,7 +305,9 @@ class SummaryService:
                 SummaryDO.is_deleted.is_(False),
                 SummaryDO.is_summary_group.is_(True),
             ]
-            count_stmt = select(func.count()).select_from(SummaryDO).where(and_(*filters))
+            count_stmt = (
+                select(func.count()).select_from(SummaryDO).where(and_(*filters))
+            )
             total = (await session.execute(count_stmt)).scalar_one()
 
             stmt = (
@@ -350,50 +359,46 @@ class SummaryService:
         self, user_email: str, dto: QuerySummaryDTO
     ) -> tuple[list[SummaryInfoItem], int]:
         """List lightweight summary info for integrity checking.
-
-        Returns a (items, total_count) tuple where total_count is the
-        full count of matching rows (not just the current page), so
-        callers can compute correct pagination metadata. Without this,
-        the sync-manifest endpoint would report the current page size as
-        the total, causing clients to believe the returned page is the
-        entire server-side data set and never fetch subsequent pages.
+        Returns a (items, total_count) tuple. Unlike list_summaries/
+        list_groups, this endpoint does NOT paginate by the client's
+        requested page/size: empirically the real Supernote device only
+        ever requests page 1 of this sync-manifest endpoint and never
+        walks subsequent pages, even after total_pages was fixed to
+        report the true page count (confirmed via trace log across
+        multiple real sync attempts). A device that treats page 1 as the
+        entire truth will simply never see summaries beyond whatever
+        fixed page size it requested, no matter how total_pages is
+        reported.
+        Per docs/summary_api.md, this endpoint is explicitly a
+        lightweight "Sync Manifest" (id/hash pairs only, no content) --
+        it exists to avoid downloading full summary bodies, not to be
+        UI-paginated. Since a real client never asks for more than page
+        1 gives it, we return the full matching set for the user in one
+        response, up to a generous safety cap to bound worst-case query
+        cost against a pathologically large account.
         """
         user_id = await self.user_service.get_user_id(user_email)
-        page = dto.page or 1
-        size = dto.size or 20
         async with self.session_manager.session() as session:
             filters = [
                 SummaryDO.user_id == user_id,
                 SummaryDO.is_deleted.is_(False),
                 SummaryDO.is_summary_group.is_(False),
             ]
-
             if dto.parent_unique_identifier is not None:
                 filters.append(
                     SummaryDO.parent_unique_identifier == dto.parent_unique_identifier
                 )
-
             if dto.ids:
                 filters.append(SummaryDO.id.in_(dto.ids))
-
-            count_stmt = select(func.count()).select_from(SummaryDO).where(and_(*filters))
+            count_stmt = (
+                select(func.count()).select_from(SummaryDO).where(and_(*filters))
+            )
             total = (await session.execute(count_stmt)).scalar_one()
-
-            # Most-recent-first: empirically the real Supernote device only
-            # ever requests page 1 of this sync-manifest endpoint (confirmed
-            # via trace log across multiple real sync attempts, even after
-            # total_pages was fixed to report the true page count) -- it
-            # never walks subsequent pages. If page 1 is oldest-first, brand
-            # new/changed summaries beyond page 1 are invisible to whatever
-            # hash-diff logic the device runs on that single page. Ordering
-            # newest-first maximizes the chance page 1 actually contains the
-            # content that changed since the device's last sync.
             stmt = (
                 select(SummaryDO)
                 .where(and_(*filters))
                 .order_by(SummaryDO.id.desc())
-                .offset((page - 1) * size)
-                .limit(size)
+                .limit(MAX_SYNC_MANIFEST_ROWS)
             )
             result = await session.execute(stmt)
             summaries = list(result.scalars().all())

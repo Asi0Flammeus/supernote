@@ -203,13 +203,7 @@ async def test_advanced_queries(summary_client: SummaryClient) -> None:
 
 
 async def test_query_summary_hash_pagination(summary_client: SummaryClient) -> None:
-    """query/summary/hash must report the true total count and page count.
-
-    Regression test for a bug where totalRecords/totalPages were derived
-    from the current page's length instead of a full COUNT(*), causing
-    clients doing sync-manifest checks to believe the first page was the
-    entire data set and never fetch subsequent pages.
-    """
+    """query/summary/hash must report the true total count and page count."""
     total_summaries = 25
     page_size = 10
     created_ids = []
@@ -222,30 +216,48 @@ async def test_query_summary_hash_pagination(summary_client: SummaryClient) -> N
         add_response = await summary_client.add_summary(add_dto)
         assert add_response.success
         created_ids.append(add_response.id)
+    response = await summary_client.query_summary_hash(
+        QuerySummaryDTO(page=1, size=page_size)
+    )
+    assert response.success
+    assert response.total_records == total_summaries
+    assert response.total_pages == 1
+    assert response.current_page == 1
+    assert response.page_size == total_summaries
+    assert {item.id for item in response.summary_info_vo_list} == set(created_ids)
 
-    seen_ids: set[int] = set()
-    page = 1
-    while True:
-        response = await summary_client.query_summary_hash(
-            QuerySummaryDTO(page=page, size=page_size)
+
+async def test_query_summary_hash_returns_full_set_beyond_default_page_size(
+    summary_client: SummaryClient,
+) -> None:
+    """query/summary/hash must never truncate to a fixed page size.
+    Regression test: the real Supernote device only ever requests page 1
+    of this sync-manifest endpoint and never paginates further, even when
+    totalPages correctly reports more than one page. A user with many
+    summaries for a single book (e.g. 130+ digest entries) must therefore
+    get every one of them back in a single call, not just a default-sized
+    first page.
+    """
+    total_summaries = 131
+    created_ids = []
+    for i in range(total_summaries):
+        add_dto = AddSummaryDTO(
+            content=f"Digest entry {i}",
+            data_source="TEST",
+            source_path="/Document/Books/design_of_everyday_things.pdf",
         )
-        assert response.success
-        assert response.total_records == total_summaries
-        assert response.total_pages == 3
-        assert response.current_page == page
-        assert response.page_size == page_size
-        if page < 3:
-            assert len(response.summary_info_vo_list) == page_size
-        else:
-            assert len(response.summary_info_vo_list) == total_summaries - 2 * page_size
-        seen_ids.update(item.id for item in response.summary_info_vo_list)
-        if page >= response.total_pages:
-            break
-        page += 1
-
-    # Every created summary must be reachable across pages exactly once,
-    # with no gaps and no duplicates caused by unordered pagination.
-    assert seen_ids == set(created_ids)
+        add_response = await summary_client.add_summary(add_dto)
+        assert add_response.success
+        created_ids.append(add_response.id)
+    # Default request shape: no explicit size, as the real device sends.
+    response = await summary_client.query_summary_hash(QuerySummaryDTO())
+    assert response.success
+    assert response.total_records == total_summaries
+    assert response.total_pages == 1
+    assert response.current_page == 1
+    assert response.page_size == total_summaries
+    assert len(response.summary_info_vo_list) == total_summaries
+    assert {item.id for item in response.summary_info_vo_list} == set(created_ids)
 
 
 async def test_query_summary_group_pagination(summary_client: SummaryClient) -> None:
@@ -273,3 +285,27 @@ async def test_query_summary_group_pagination(summary_client: SummaryClient) -> 
     assert response_last.total_records == total_groups
     assert response_last.total_pages == 3
     assert len(response_last.summary_do_list) == 1
+
+
+async def test_delete_summary_device_alias(
+    summary_client: SummaryClient, authenticated_client: Client
+) -> None:
+    """DELETE /api/file/delete/summary must work like the POST route.
+    Regression test: the real device issues DELETE (not POST) with body
+    {"id": <int>} when deleting a digest/summary entry -- confirmed via
+    trace log -- and previously got a 404 since only the POST alias
+    existed.
+    """
+    add_dto = AddSummaryDTO(content="To be deleted via DELETE verb")
+    add_response = await summary_client.add_summary(add_dto)
+    assert add_response.success
+    summary_id = add_response.id
+    assert summary_id is not None
+    resp = await authenticated_client.request(
+        "delete", "/api/file/delete/summary", json={"id": summary_id}
+    )
+    assert resp.status == 200
+    body = await resp.json()
+    assert body["success"] is True
+    query_response = await summary_client.query_summaries(ids=[summary_id])
+    assert len(query_response.summary_do_list) == 0

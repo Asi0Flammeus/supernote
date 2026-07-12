@@ -163,6 +163,19 @@ async def handle_delete_summary(request: web.Request) -> web.Response:
         return SupernoteError.uncaught(err).to_response()
 
 
+@routes.delete("/api/file/delete/summary")
+async def handle_delete_summary_device(request: web.Request) -> web.Response:
+    # Endpoint: DELETE /api/file/delete/summary
+    # Purpose: Device-compatible alias for POST /api/file/delete/summary.
+    # The real Supernote firmware issues a DELETE (not POST) with the same
+    # {"id": <int>} JSON body when the user deletes a digest/summary entry
+    # (confirmed via trace log: DELETE /api/file/delete/summary body
+    # {"id": ...}), which previously 404'd since only the POST route
+    # existed. Delegates to the same handler/service call.
+    # Response: BaseResponse
+    return await handle_delete_summary(request)
+
+
 @routes.post("/api/file/query/summary")
 async def handle_query_summary(request: web.Request) -> web.Response:
     # Endpoint: POST /api/file/query/summary
@@ -356,16 +369,20 @@ async def handle_query_summary_hash(request: web.Request) -> web.Response:
     summary_service: SummaryService = request.app["summary_service"]
 
     try:
-        page_size = req_data.size or 20
+        # This endpoint does not paginate by the client's requested size:
+        # list_summary_infos always returns the full matching set (see its
+        # docstring / MAX_SYNC_MANIFEST_ROWS), since the real device only
+        # ever fetches page 1 and never walks subsequent pages. Report a
+        # single page whose size equals what was actually returned so
+        # totalPages/pageSize accurately describe the response body.
         infos, total = await summary_service.list_summary_infos(user_email, req_data)
-        total_pages = -(-total // page_size) if page_size else 1
         return web.json_response(
             QuerySummaryMD5HashVO(
                 summary_info_vo_list=infos,
                 total_records=total,
-                total_pages=max(total_pages, 1),
-                current_page=req_data.page or 1,
-                page_size=page_size,
+                total_pages=1,
+                current_page=1,
+                page_size=len(infos),
             ).to_dict()
         )
     except SupernoteError as err:
