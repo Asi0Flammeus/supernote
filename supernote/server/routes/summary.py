@@ -145,6 +145,20 @@ async def handle_update_summary(request: web.Request) -> web.Response:
         return SupernoteError.uncaught(err).to_response()
 
 
+@routes.put("/api/file/update/summary")
+async def handle_update_summary_device(request: web.Request) -> web.Response:
+    # Endpoint: PUT /api/file/update/summary
+    # Purpose: Device-compatible alias for POST /api/file/update/summary.
+    # The real Supernote firmware issues a PUT (not POST) with the same
+    # full UpdateSummaryDTO body when it re-syncs/edits an existing
+    # summary entry (confirmed via trace log: PUT /api/file/update/summary
+    # with a full summary payload, e.g. content/handwrite fields for an
+    # existing id), which previously 404'd since only the POST route
+    # existed. Delegates to the same handler/service call.
+    # Response: BaseResponse
+    return await handle_update_summary(request)
+
+
 @routes.post("/api/file/delete/summary")
 async def handle_delete_summary(request: web.Request) -> web.Response:
     # Endpoint: POST /api/file/delete/summary

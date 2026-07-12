@@ -309,3 +309,30 @@ async def test_delete_summary_device_alias(
     assert body["success"] is True
     query_response = await summary_client.query_summaries(ids=[summary_id])
     assert len(query_response.summary_do_list) == 0
+
+
+async def test_update_summary_device_alias(
+    summary_client: SummaryClient, authenticated_client: Client
+) -> None:
+    """PUT /api/file/update/summary must work like the POST route.
+    Regression test: the real device issues PUT (not POST) with the full
+    UpdateSummaryDTO body when it re-syncs/edits an existing summary --
+    confirmed via trace log -- and previously got a 404 since only the
+    POST alias existed.
+    """
+    add_dto = AddSummaryDTO(content="Original content")
+    add_response = await summary_client.add_summary(add_dto)
+    assert add_response.success
+    summary_id = add_response.id
+    assert summary_id is not None
+    resp = await authenticated_client.request(
+        "put",
+        "/api/file/update/summary",
+        json={"id": summary_id, "content": "Updated via PUT verb"},
+    )
+    assert resp.status == 200
+    body = await resp.json()
+    assert body["success"] is True
+    query_response = await summary_client.query_summaries(ids=[summary_id])
+    assert len(query_response.summary_do_list) == 1
+    assert query_response.summary_do_list[0].content == "Updated via PUT verb"
